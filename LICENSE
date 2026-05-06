@@ -1,21 +1,81 @@
-MIT License
+                    MACO PROTOCOL HERITAGE LICENSE
+                         Version 1.0, May 2026
 
-Copyright (c) 2026 ghos-sd
+Copyright (c) 2026 Ibrahim Mustafa Mohammed Hassan
+Contact: abrahimh727@gmail.com
+ORCID: 0000-000X-XXXX-XXXX
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+DEFINITION OF "MACO PROTOCOL": The clinical safety methodology based on 
+structured inter-agent conflict, deterministic veto logic, and the principle 
+"Clinical safety emerges from structured conflict, not artificial consensus."
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+                    1. GRANT OF RIGHTS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Subject to the terms of this License, you are hereby granted a worldwide, 
+royalty-free, non-exclusive license to:
+
+a) Use, reproduce, and distribute this Software for ACADEMIC RESEARCH, 
+   EDUCATIONAL, and NON-PROFIT CLINICAL VALIDATION purposes only.
+
+b) Create and distribute DERIVATIVE WORKS, provided that such works are also 
+   licensed under this same MACO Protocol Heritage License.
+
+                    2. MANDATORY ATTRIBUTION
+
+Any PUBLIC USE, PUBLICATION, DISTRIBUTION, or DERIVATIVE WORK must include 
+prominent attribution in all of the following locations:
+
+a) Source Code: Header comment in all files containing:
+   "Based on MACO Protocol v2.2 by Ibrahim Mustafa Mohammed Hassan"
+
+b) Documentation: README, website, or paper abstract must state:
+   "This work implements/extends the MACO Protocol created by 
+   Ibrahim Mustafa Mohammed Hassan, 2026."
+
+c) Academic Citation: Any academic paper, thesis, or report MUST cite:
+   Hassan, I.M.M. (2026). MACO: Multi-Agent Clinical Orchestration v2.2. 
+   arXiv:2505.XXXXX [cs.AI]. DOI: 10.5281/zenodo.XXXXX
+
+d) UI/About Page: Any software application must display on its "About" or 
+   splash screen: "Safety architecture based on MACO Protocol - Hassan 2026"
+
+Failure to provide attribution is a material breach of this license and 
+terminates your rights automatically.
+
+                    3. COMMERCIAL USE RESTRICTIONS
+
+a) CLOSED-SOURCE COMMERCIAL USE IS STRICTLY PROHIBITED without explicit 
+   written permission from the Licensor.
+
+b) COMMERCIAL USE IS PERMITTED ONLY IF:
+   1. The entire application source code is released under this License, OR
+   2. A separate Commercial License is obtained from the Licensor.
+
+c) HOSPITALS & HEALTH SYSTEMS: May use internally without restriction, 
+   provided they do not sell or redistribute as a commercial product.
+
+                    4. PRESERVATION OF PROVENANCE
+
+You may not remove, alter, or obscure any attribution, copyright notices, 
+or the core principle "Clinical safety emerges from structured conflict" 
+from the Software or its documentation. This principle must remain 
+attributed to Ibrahim Mustafa Mohammed Hassan in perpetuity.
+
+                    5. PATENT LICENSE
+
+Each contributor hereby grants you a perpetual, worldwide, royalty-free 
+patent license for their patent claims necessarily infringed by their 
+contribution alone or by combination with this Software.
+
+                    6. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. THE LICENSOR 
+SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.
+
+                    7. TERMINATION
+
+Your rights under this License terminate automatically if you fail to 
+comply with any term. Upon termination, you must cease all use and 
+destroy all copies. Sections 2, 4, 5, 6 survive termination.
+
+For commercial licensing inquiries: abrahimh727@gmail.com
