@@ -1,37 +1,38 @@
 """
 ===========================================================================
-MACO v2.2 – Multi-Agent Clinical Orchestration (Refactored Prototype)
+MACO v2.2 – Multi-Agent Clinical Orchestration (FHIR-Ready Refactor)
 ===========================================================================
 "Clinical safety emerges from structured conflict between constrained expert domains."
 
-This prototype implements a deterministic, multi-agent clinical reasoning framework
-with a focus on safety, explainability, and auditability. All components are
-modular, research-oriented, and fully typed.
+This version refactors the patient and clinical data models to align with
+HL7 FHIR R4 Resources. All observations carry LOINC codes and effective
+timestamps; conditions are mapped to SNOMED CT. HCA validation now uses
+coded concepts, improving semantic precision and auditability.
 """
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Any, Set
+from typing import List, Dict, Optional, Tuple, Any, Set, Union
 from enum import Enum, auto
+from datetime import datetime
 import itertools
 
-# ===========================================================================
-# 1. ENUMS & CONSTANTS
-# ===========================================================================
+# =====================================================================
+# 1. ENUMS, CODING SYSTEMS & CONSTANTS
+# =====================================================================
 
 class Severity(Enum):
-    """Standard severity scale for clinical risks."""
-    CRITICAL = 5   # Immediate life‑threatening danger
-    HIGH = 4       # Major organ risk or severe interaction
-    MODERATE = 3   # Important, requiring mitigation
-    LOW = 2        # Minor concern
-    NEGLIGIBLE = 1 # Negligible risk
+    CRITICAL = 5
+    HIGH = 4
+    MODERATE = 3
+    LOW = 2
+    NEGLIGIBLE = 1
 
 class EvidenceLevel(Enum):
-    A = 1.0         # Meta‑analyses, RCTs
-    B = 0.7         # Well‑designed non‑randomised studies
-    C = 0.4         # Expert consensus / case reports
-    D = 0.2         # Preclinical or anecdotal
+    A = 1.0
+    B = 0.7
+    C = 0.4
+    D = 0.2
 
 class ContraindicationType(Enum):
     ALLERGY = auto()
@@ -40,7 +41,6 @@ class ContraindicationType(Enum):
     HEMODYNAMIC_INSTABILITY = auto()
     LAB_THRESHOLD = auto()
 
-# Organ systems for cross‑organ conflict
 class OrganSystem(Enum):
     CARDIOVASCULAR = "cardiovascular"
     RENAL = "renal"
@@ -51,7 +51,60 @@ class OrganSystem(Enum):
     IMMUNE = "immune"
     GI = "gastrointestinal"
 
-# Mapping from risk string to (severity_value, primary_organ_system)
+# ---------------------------------------------------------------
+# LOINC codes for observations (FHIR R4 Observation.code)
+# ---------------------------------------------------------------
+LOINC_VITALS = {
+    "systolic_bp":     {"code": "8480-6", "display": "Systolic blood pressure", "unit": "mm[Hg]"},
+    "diastolic_bp":    {"code": "8462-4", "display": "Diastolic blood pressure", "unit": "mm[Hg]"},
+    "heart_rate":      {"code": "8867-4", "display": "Heart rate", "unit": "/min"},
+    "respiratory_rate": {"code": "9279-1", "display": "Respiratory rate", "unit": "/min"},
+    "temperature_c":   {"code": "8310-5", "display": "Body temperature", "unit": "Cel"},
+    "spo2":            {"code": "2708-6", "display": "Oxygen saturation in Arterial blood", "unit": "%"},
+}
+
+LOINC_LABS = {
+    "creatinine": {"code": "2160-0", "display": "Creatinine [Mass/volume] in Serum or Plasma", "unit": "mg/dL"},
+    "egfr":       {"code": "62238-1", "display": "Glomerular filtration rate/1.73 sq M predicted", "unit": "mL/min/1.73m2"},
+    "potassium":  {"code": "2823-3", "display": "Potassium [Moles/volume] in Serum or Plasma", "unit": "mmol/L"},
+    "sodium":     {"code": "2951-2", "display": "Sodium [Moles/volume] in Serum or Plasma", "unit": "mmol/L"},
+    "wbc":        {"code": "26464-8", "display": "Leukocytes [#/volume] in Blood", "unit": "/mm3"},
+    "lactate":    {"code": "2524-6", "display": "Lactate [Moles/volume] in Blood", "unit": "mmol/L"},
+}
+
+# ---------------------------------------------------------------
+# SNOMED CT codes for conditions (FHIR Condition.code)
+# ---------------------------------------------------------------
+SNOMED_CONDITIONS = {
+    # internal key -> (SNOMED code, display)
+    "heart_failure":            ("84114007", "Heart failure (disorder)"),
+    "kidney_disease":           ("709044004", "Chronic kidney disease (disorder)"),
+    "hypertension":             ("38341003", "Hypertensive disorder, systemic arterial (disorder)"),
+    "renal_impairment_severe":  ("431855005", "Chronic kidney disease stage 4 (disorder)"),
+    "fluid_overload":           ("42399005", "Fluid overload (disorder)"),
+    "infection_bacterial":      ("40733004", "Bacterial infection (disorder)"),
+    "sepsis":                   ("91302008", "Sepsis (disorder)"),
+}
+
+# Map from old string keys to SNOMED display; used for backward‑compatible
+# patient.has_condition() matching.
+_SNOMED_STR_TO_DISPLAY = {k: v[1] for k, v in SNOMED_CONDITIONS.items()}
+
+# ---------------------------------------------------------------
+# Allergy codes (simplified, could be extended to SNOMED substances)
+# ---------------------------------------------------------------
+# In a full FHIR model, allergies would be AllergyIntolerance resources
+# with a code from a substance hierarchy. We keep the string `allergy_class`
+# as the primary matching mechanism, but add a mapping to SNOMED for reference.
+ALLERGY_CLASS_SNOMED = {
+    "penicillin":    "373270004",    # Penicillin (substance)
+    "sulfonamide":   "387406002",    # Sulfonamide (substance)
+    "ace_inhibitor": "96352001",     # Angiotensin‑converting enzyme inhibitor (substance)
+    "aminoglycoside":"360204005",    # Aminoglycoside (substance)
+    "cephalosporin": "373186003",    # Cephalosporin (substance)
+}
+
+# Risk severity map (unchanged)
 RISK_SEVERITY_MAP: Dict[str, Tuple[float, OrganSystem]] = {
     "renal_toxicity":      (0.9, OrganSystem.RENAL),
     "hepatotoxicity":      (0.9, OrganSystem.HEPATIC),
@@ -67,7 +120,6 @@ RISK_SEVERITY_MAP: Dict[str, Tuple[float, OrganSystem]] = {
     "cough":               (0.2, OrganSystem.RESPIRATORY),
 }
 
-# Organ cross‑interaction penalty (additive when two different organs interact)
 ORGAN_CROSS_PENALTY: Dict[Tuple[OrganSystem, OrganSystem], float] = {
     (OrganSystem.RENAL, OrganSystem.CARDIOVASCULAR): 0.6,
     (OrganSystem.CARDIOVASCULAR, OrganSystem.RENAL): 0.6,
@@ -75,28 +127,25 @@ ORGAN_CROSS_PENALTY: Dict[Tuple[OrganSystem, OrganSystem], float] = {
     (OrganSystem.RENAL, OrganSystem.HEPATIC): 0.5,
     (OrganSystem.CARDIOVASCULAR, OrganSystem.RESPIRATORY): 0.5,
     (OrganSystem.RESPIRATORY, OrganSystem.CARDIOVASCULAR): 0.5,
-    # Default cross‑organ influence handled in code (low)
 }
 
-# ===========================================================================
-# 2. DRUG DATABASE (simplified pharmacopoeia)
-# ===========================================================================
+# =====================================================================
+# 2. DRUG DATABASE (unchanged except for coded condition keys)
+# =====================================================================
 
 @dataclass
 class DrugInfo:
     name: str
     indications: List[str]
-    contraindications: Dict[str, ContraindicationType]  # condition -> type
-    risks: Dict[str, float]          # risk -> internal severity (0‑1)
-    interactions: Dict[str, str]     # other_drug -> description (severity inferred)
+    contraindications: Dict[str, ContraindicationType]  # condition keys (internal strings)
+    risks: Dict[str, float]
+    interactions: Dict[str, str]
     evidence_level: EvidenceLevel
     mechanism: str
     guideline_source: str = "NICE"
     guideline_version: str = "2024"
-    # Allergy cross‑reactivity mapping (drug class -> allergen)
-    allergy_class: Optional[str] = None  # e.g., "penicillin", "sulfonamide"
+    allergy_class: Optional[str] = None
 
-# Example drugs (partial)
 DRUG_DB: Dict[str, DrugInfo] = {
     "Lisinopril": DrugInfo(
         name="Lisinopril",
@@ -184,53 +233,151 @@ DRUG_DB: Dict[str, DrugInfo] = {
     ),
 }
 
-# Drug‑allergy mapping: allergen name → set of drug names (or classes)
 ALLERGY_DRUG_MAP: Dict[str, Set[str]] = {
-    "penicillin": {"Penicillin_V", "Amoxicillin", "Ampicillin"},  # not in our DB but illustrative
+    "penicillin": {"Penicillin_V", "Amoxicillin", "Ampicillin"},
     "sulfonamide": {"Sulfamethoxazole"},
     "ace_inhibitor": {"Lisinopril", "Enalapril"},
     "aminoglycoside": {"Gentamicin", "Tobramycin"},
     "cephalosporin": {"Ceftriaxone", "Cefazolin"},
 }
 
-# ===========================================================================
-# 3. PATIENT & CLINICAL DATA MODELS
-# ===========================================================================
+# =====================================================================
+# 3. FHIR-ALIGNED CLINICAL DATA MODELS
+# =====================================================================
+
+@dataclass
+class Condition:
+    """FHIR Condition resource (simplified)."""
+    system: str = "http://snomed.info/sct"
+    code: str = ""
+    display: str = ""
+    # Optional clinical status and verification status can be added if needed.
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, Condition):
+            return self.code == other.code
+        return False
+
+    def __hash__(self) -> int:
+        return hash(self.code)
 
 @dataclass
 class VitalSigns:
-    systolic_bp: float      # mmHg
-    diastolic_bp: float     # mmHg
-    heart_rate: float       # bpm
-    respiratory_rate: float # breaths/min
-    temperature_c: float    # Celsius
-    spo2: float             # % (optional, could be None)
+    """Vital signs as FHIR Observations. Each attribute corresponds to a LOINC code."""
+    systolic_bp: float          # mm[Hg]
+    diastolic_bp: float
+    heart_rate: float           # /min
+    respiratory_rate: float
+    temperature_c: float        # Celsius
+    spo2: float                 # %
+    effective_datetime: Optional[datetime] = None  # FHIR effectiveDateTime (R4)
+
+    # FHIR mapping: internal attribute -> LOINC coding
+    FHIR_MAPPING = LOINC_VITALS
+
+    def to_fhir_observations(self) -> List[Dict[str, Any]]:
+        """Generate a list of simplified FHIR Observation dictionaries with code and value."""
+        obs_list = []
+        for attr, loinc in self.FHIR_MAPPING.items():
+            value = getattr(self, attr)
+            if value is None:
+                continue
+            obs = {
+                "resourceType": "Observation",
+                "status": "final",
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": loinc["code"],
+                        "display": loinc["display"]
+                    }]
+                },
+                "valueQuantity": {
+                    "value": value,
+                    "unit": loinc["unit"],
+                    "system": "http://unitsofmeasure.org",
+                    "code": loinc["unit"]
+                },
+                "effectiveDateTime": self.effective_datetime.isoformat() if self.effective_datetime else None
+            }
+            obs_list.append(obs)
+        return obs_list
 
 @dataclass
 class LabResults:
-    creatinine: float       # mg/dL
-    egfr: float             # mL/min/1.73m² (calculated)
-    potassium: float        # mmol/L
-    sodium: float           # mmol/L
-    wbc: Optional[float] = None
-    lactate: Optional[float] = None
+    """Lab results as FHIR Observations."""
+    creatinine: float           # mg/dL
+    egfr: float                 # mL/min/1.73m²
+    potassium: float            # mmol/L
+    sodium: float
+    wbc: Optional[float] = None # /mm3
+    lactate: Optional[float] = None  # mmol/L
+    effective_datetime: Optional[datetime] = None
+
+    FHIR_MAPPING = LOINC_LABS
+
+    def to_fhir_observations(self) -> List[Dict[str, Any]]:
+        obs_list = []
+        for attr, loinc in self.FHIR_MAPPING.items():
+            value = getattr(self, attr)
+            if value is None:
+                continue
+            obs = {
+                "resourceType": "Observation",
+                "status": "final",
+                "code": {
+                    "coding": [{
+                        "system": "http://loinc.org",
+                        "code": loinc["code"],
+                        "display": loinc["display"]
+                    }]
+                },
+                "valueQuantity": {
+                    "value": value,
+                    "unit": loinc["unit"],
+                    "system": "http://unitsofmeasure.org",
+                    "code": loinc["unit"]
+                },
+                "effectiveDateTime": self.effective_datetime.isoformat() if self.effective_datetime else None
+            }
+            obs_list.append(obs)
+        return obs_list
 
 @dataclass
 class Patient:
     id: str
     age: int
     weight_kg: float
-    conditions: List[str]           # e.g., ["heart_failure", "kidney_disease"]
-    allergies: List[str]            # e.g., ["penicillin", "sulfa"]
-    medications: List[str]          # current active medications
+    conditions: List[Condition]                     # SNOMED CT coded conditions
+    allergies: List[str]                            # keep as strings for now (could be extended to Substance codes)
+    medications: List[str]
     vitals: VitalSigns
     labs: LabResults
 
-    def has_condition(self, condition: str) -> bool:
-        return condition in self.conditions
+    def has_condition(self, identifier: str) -> bool:
+        """
+        Check if patient has a condition matching the given identifier.
+        The identifier can be a SNOMED code (e.g., '84114007'), a display name
+        (e.g., 'Heart failure'), or an old internal string key (e.g., 'heart_failure').
+        """
+        # First map old string keys to SNOMED display if possible
+        mapped_display = _SNOMED_STR_TO_DISPLAY.get(identifier, identifier)
+
+        for cond in self.conditions:
+            if cond.code == identifier or cond.display.lower() == mapped_display.lower():
+                return True
+        return False
+
+    def has_condition_code(self, snomed_code: str) -> bool:
+        """Check for a specific SNOMED CT code."""
+        return any(c.code == snomed_code for c in self.conditions)
 
     def has_any_allergy_class(self, classes: List[str]) -> bool:
-        """Check if the patient has an allergy that cross‑reacts with any of the given drug classes."""
+        """
+        Check if patient has an allergy that cross‑reacts with any of the given drug classes.
+        Still uses string/substring matching; the allergy list may include SNOMED display names.
+        In a full FHIR implementation, allergies would be coded as AllergyIntolerance resources.
+        """
         for allergy in self.allergies:
             for cls in classes:
                 if allergy.lower() in cls.lower() or cls.lower() in allergy.lower():
@@ -239,7 +386,6 @@ class Patient:
 
     @property
     def renal_stage(self) -> str:
-        """Interpret eGFR into CKD stage."""
         egfr = self.labs.egfr
         if egfr >= 90:
             return "Stage 1"
@@ -254,48 +400,52 @@ class Patient:
         else:
             return "Stage 5"
 
-# ===========================================================================
-# 4. PROPOSAL & GUIDELINE TRACEABILITY
-# ===========================================================================
+# Helper to build a Condition from an old string key
+def condition_from_key(key: str) -> Condition:
+    snomed = SNOMED_CONDITIONS.get(key, ("", key))
+    return Condition(system="http://snomed.info/sct", code=snomed[0], display=snomed[1])
+
+# =====================================================================
+# 4. PROPOSAL & GUIDELINE (unchanged)
+# =====================================================================
 
 @dataclass
 class Proposal:
     agent_name: str
-    treatment: str           # drug name (from DRUG_DB)
-    confidence: float        # agent’s own confidence (0‑1)
+    treatment: str
+    confidence: float
     evidence_level: EvidenceLevel
-    risks: List[str]         # risk labels present in RISK_SEVERITY_MAP
+    risks: List[str]
     mechanism: str
     guideline_source: str = "NICE"
     guideline_version: str = "2024"
-    alternative_to: Optional[str] = None  # if this is an alternative proposal
+    alternative_to: Optional[str] = None
 
     def drug_info(self) -> Optional[DrugInfo]:
         return DRUG_DB.get(self.treatment)
 
-# ===========================================================================
-# 5. SAFETY LAYER (HCA & VALIDATION)
-# ===========================================================================
+# =====================================================================
+# 5. SAFETY LAYER – HCA UPDATED TO USE FHIR CODES
+# =====================================================================
 
 @dataclass
 class SafetyVeto:
-    """Information about a safety veto."""
     proposal: Proposal
     reason: str
     severity: Severity
     veto_type: ContraindicationType
 
 class HCA:
-    """Deterministic Historical Context Agent – enforces immutable patient constraints."""
+    """Historical Context Agent – now uses SNOMED/LOINC codes where relevant."""
 
     @staticmethod
     def _check_allergy(patient: Patient, proposal: Proposal) -> Optional[SafetyVeto]:
         drug = proposal.drug_info()
         if not drug or not drug.allergy_class:
             return None
-        # Map patient allergies to drug class
+        # Allergy matching uses the allergy_class string; we can also check SNOMED
+        # if allergies were coded, but here we keep the existing logic.
         for allergy in patient.allergies:
-            # Check if patient allergy matches the drug's allergy class
             if allergy.lower() in drug.allergy_class.lower() or drug.allergy_class.lower() in allergy.lower():
                 return SafetyVeto(
                     proposal,
@@ -310,18 +460,20 @@ class HCA:
         drug = proposal.drug_info()
         if not drug:
             return None
-        contradictions = drug.contraindications
-        # Renal impairment severity check
-        if "renal_impairment_severe" in contradictions:
-            if patient.labs.egfr < 30:
+        contraindications = drug.contraindications
+
+        # Renal impairment check — uses LOINC‑coded eGFR value, condition check via SNOMED
+        if "renal_impairment_severe" in contraindications:
+            # Check SNOMED code 431855005 (CKD Stage 4) or eGFR threshold
+            if patient.labs.egfr < 30 or patient.has_condition_code("431855005"):
                 return SafetyVeto(
                     proposal,
-                    f"Renal contraindication: eGFR {patient.labs.egfr} (<30) with {drug.name}",
+                    f"Renal contraindication: eGFR {patient.labs.egfr} or coded CKD Stage 4 with {drug.name}",
                     Severity.CRITICAL,
                     ContraindicationType.ORGAN_FAILURE
                 )
         # Hemodynamic instability
-        if "severe_hypotension" in contradictions or "bradycardia_severe" in contradictions:
+        if "severe_hypotension" in contraindications or "bradycardia_severe" in contraindications:
             if patient.vitals.systolic_bp < 90:
                 return SafetyVeto(
                     proposal,
@@ -339,7 +491,6 @@ class HCA:
         for med in patient.medications:
             if med in drug.interactions:
                 interaction_desc = drug.interactions[med]
-                # critical interactions lead to veto, others just increase risk
                 if "severe" in interaction_desc or "life" in interaction_desc:
                     return SafetyVeto(
                         proposal,
@@ -350,26 +501,23 @@ class HCA:
         return None
 
     def validate(self, patient: Patient, proposal: Proposal) -> Tuple[bool, Optional[SafetyVeto]]:
-        """Returns (is_safe, veto_info). If safe, veto_info is None."""
         for check in [self._check_allergy, self._check_organ_contraindications, self._check_drug_interactions]:
             veto = check(patient, proposal)
             if veto:
                 return False, veto
         return True, None
 
-# ===========================================================================
-# 6. CLINICAL DOMAIN AGENTS
-# ===========================================================================
+# =====================================================================
+# 6. CLINICAL DOMAIN AGENTS (unchanged except condition checks now handle coded conditions)
+# =====================================================================
 
 class BaseClinicalAgent:
-    """Abstract agent – must implement propose() and optionally propose_alternative()."""
     name: str = "BaseAgent"
 
     def propose(self, patient: Patient) -> Optional[Proposal]:
         raise NotImplementedError
 
     def propose_alternative(self, patient: Patient, current_conflicts: List[Proposal]) -> Optional[Proposal]:
-        """Optionally generate a lower‑risk alternative."""
         return None
 
 class CardiologyAgent(BaseClinicalAgent):
@@ -377,11 +525,10 @@ class CardiologyAgent(BaseClinicalAgent):
     def propose(self, patient: Patient) -> Optional[Proposal]:
         if not patient.has_condition("heart_failure"):
             return None
-        # Choose ACEi vs ARB vs beta‑blocker based on renal function
         if patient.labs.egfr < 30:
-            drug = "Losartan"  # ARB preferred
+            drug = "Losartan"
         else:
-            drug = "Lisinopril"  # ACEi first line
+            drug = "Lisinopril"
         info = DRUG_DB[drug]
         return Proposal(
             agent_name=self.name,
@@ -395,9 +542,8 @@ class CardiologyAgent(BaseClinicalAgent):
         )
 
     def propose_alternative(self, patient: Patient, current_conflicts: List[Proposal]) -> Optional[Proposal]:
-        """If primary drug is vetoed or high conflict, try Carvedilol (beta‑blocker)."""
         if any(p.agent_name == self.name for p in current_conflicts):
-            return None  # avoid duplicate
+            return None
         if patient.vitals.systolic_bp >= 100 and patient.vitals.heart_rate >= 60:
             return Proposal(
                 agent_name=self.name,
@@ -415,7 +561,6 @@ class NephrologyAgent(BaseClinicalAgent):
     def propose(self, patient: Patient) -> Optional[Proposal]:
         if not patient.has_condition("kidney_disease"):
             return None
-        # Protect kidneys: recommend ARB for reno‑protection if heart failure present
         if patient.has_condition("heart_failure"):
             return Proposal(
                 agent_name=self.name,
@@ -430,7 +575,6 @@ class NephrologyAgent(BaseClinicalAgent):
         return None
 
     def propose_alternative(self, patient: Patient, current_conflicts: List[Proposal]) -> Optional[Proposal]:
-        # Could propose Furosemide for volume overload (if appropriate)
         if patient.has_condition("fluid_overload"):
             return Proposal(
                 agent_name=self.name,
@@ -446,20 +590,17 @@ class NephrologyAgent(BaseClinicalAgent):
 class IDAgent(BaseClinicalAgent):
     name = "Infectious Disease"
     def propose(self, patient: Patient) -> Optional[Proposal]:
-        if not any("infection" in c for c in patient.conditions):
+        if not any("infection" in c.display.lower() for c in patient.conditions):  # uses display name
             return None
-        # Select antibiotic based on renal function and allergies
         if patient.labs.egfr < 30:
-            # Avoid nephrotoxins -> Ceftriaxone (if no cephalosporin allergy)
             drug = "Ceftriaxone"
         else:
-            drug = "Gentamicin"  # more potent but nephrotoxic
+            drug = "Gentamicin"
         if patient.has_any_allergy_class(["aminoglycoside", "cephalosporin"]):
-            # fallback: safe but not in DB – simulate by choosing Ceftriaxone if no cephalosporin allergy
             if "cephalosporin" not in patient.allergies:
                 drug = "Ceftriaxone"
             else:
-                return None  # cannot treat safely
+                return None
         info = DRUG_DB[drug]
         return Proposal(
             agent_name=self.name,
@@ -473,7 +614,6 @@ class IDAgent(BaseClinicalAgent):
         )
 
     def propose_alternative(self, patient: Patient, current_conflicts: List[Proposal]) -> Optional[Proposal]:
-        # Alternative: Ceftriaxone if not already proposed
         if not any(p.treatment == "Ceftriaxone" for p in current_conflicts):
             if not patient.has_any_allergy_class(["cephalosporin"]):
                 return Proposal(
@@ -487,13 +627,13 @@ class IDAgent(BaseClinicalAgent):
                 )
         return None
 
-# ===========================================================================
-# 7. CONFLICT ENGINE (IMPROVED MODELING)
-# ===========================================================================
+# =====================================================================
+# 7. CONFLICT ENGINE (unchanged)
+# =====================================================================
 
 @dataclass
 class ConflictDetail:
-    pair: Tuple[str, str]  # agent/drug names
+    pair: Tuple[str, str]
     drug_interaction_score: float
     organ_overlap_score: float
     cumulative_toxicity_score: float
@@ -507,22 +647,18 @@ class ConflictEngine:
         sev1, org1 = RISK_SEVERITY_MAP[risk1]
         sev2, org2 = RISK_SEVERITY_MAP[risk2]
         if org1 == org2:
-            return 0.8 * (sev1 + sev2) / 2  # same organ, high conflict
-        # cross‑organ penalty
+            return 0.8 * (sev1 + sev2) / 2
         cross = ORGAN_CROSS_PENALTY.get((org1, org2), 0.2)
         return cross * (sev1 + sev2) / 2
 
     @staticmethod
     def _drug_interaction(p1: Proposal, p2: Proposal) -> float:
-        """Check if the two drugs directly interact."""
         info1 = p1.drug_info()
         info2 = p2.drug_info()
         if not info1 or not info2:
             return 0.0
-        # Direct interaction?
         if p2.treatment in info1.interactions or p1.treatment in info2.interactions:
-            return 0.9  # high penalty
-        # If both have same risk (e.g., both cause hypotension) -> increased burden
+            return 0.9
         common_risks = set(p1.risks) & set(p2.risks)
         if common_risks:
             return 0.4 * len(common_risks)
@@ -530,14 +666,11 @@ class ConflictEngine:
 
     @staticmethod
     def compute_conflict(p1: Proposal, p2: Proposal) -> ConflictDetail:
-        # Organ overlap: sum over all risk pairs
         organ_score = 0.0
         for r1 in p1.risks:
             for r2 in p2.risks:
                 organ_score += ConflictEngine._organ_overlap(r1, r2)
-        # Drug interaction
         interaction_score = ConflictEngine._drug_interaction(p1, p2)
-        # Cumulative toxicity: if both agents propose drugs with risk severity > 0.8 to same organ
         cumulative = 0.0
         for r1 in p1.risks:
             for r2 in p2.risks:
@@ -545,7 +678,7 @@ class ConflictEngine:
                     s1, o1 = RISK_SEVERITY_MAP[r1]
                     s2, o2 = RISK_SEVERITY_MAP[r2]
                     if o1 == o2 and s1 > 0.7 and s2 > 0.7:
-                        cumulative += 0.7  # additive toxicity
+                        cumulative += 0.7
         total = organ_score + interaction_score + cumulative
         return ConflictDetail(
             pair=(f"{p1.agent_name}/{p1.treatment}", f"{p2.agent_name}/{p2.treatment}"),
@@ -555,17 +688,17 @@ class ConflictEngine:
             total=round(total, 3)
         )
 
-# ===========================================================================
-# 8. SCORING MODEL (CONFIGURABLE)
-# ===========================================================================
+# =====================================================================
+# 8. SCORING MODEL (unchanged)
+# =====================================================================
 
 @dataclass
 class ScoringConfig:
-    alpha: float = 0.35      # confidence weight
-    beta: float = 0.30       # evidence weight
-    gamma: float = 0.15      # biological risk weight
-    delta: float = 0.10      # interaction penalty weight
-    epsilon: float = 0.10    # contraindication penalty weight
+    alpha: float = 0.35
+    beta: float = 0.30
+    gamma: float = 0.15
+    delta: float = 0.10
+    epsilon: float = 0.10
 
 class Scorer:
     def __init__(self, config: ScoringConfig = ScoringConfig()):
@@ -575,16 +708,14 @@ class Scorer:
         return level.value
 
     def _biological_risk(self, proposal: Proposal) -> float:
-        """Sum of severity values for each risk."""
         total = 0.0
         for risk in proposal.risks:
             sev_info = RISK_SEVERITY_MAP.get(risk)
             if sev_info:
-                total += sev_info[0]  # severity score
+                total += sev_info[0]
         return total
 
     def _interaction_penalty(self, patient: Patient, proposal: Proposal) -> float:
-        """Penalty for interactions with patient's current medications (non‑veto interactions)."""
         drug = proposal.drug_info()
         if not drug:
             return 0.0
@@ -592,19 +723,18 @@ class Scorer:
         for med in patient.medications:
             if med in drug.interactions:
                 desc = drug.interactions[med]
-                if "severe" not in desc:  # critical are already vetoed
+                if "severe" not in desc:
                     penalty += 0.5
         return penalty
 
     def _contraindication_penalty(self, patient: Patient, proposal: Proposal) -> float:
-        """Penalty for soft contraindications not triggering veto."""
         drug = proposal.drug_info()
         if not drug:
             return 0.0
         pen = 0.0
         for cond, ctype in drug.contraindications.items():
             if ctype == ContraindicationType.ALLERGY:
-                continue  # handled by veto
+                continue
             if "renal_impairment" in cond and patient.labs.egfr < 60:
                 pen += 0.4
             if "hypotension" in cond and patient.vitals.systolic_bp < 100:
@@ -617,7 +747,6 @@ class Scorer:
         bio_risk = self._biological_risk(proposal)
         int_pen = self._interaction_penalty(patient, proposal)
         contra_pen = self._contraindication_penalty(patient, proposal)
-
         score = (self.config.alpha * conf
                  + self.config.beta * ev
                  - self.config.gamma * bio_risk
@@ -625,14 +754,13 @@ class Scorer:
                  - self.config.epsilon * contra_pen)
         return round(score, 4)
 
-# ===========================================================================
-# 9. EMERGENCY DETECTOR
-# ===========================================================================
+# =====================================================================
+# 9. EMERGENCY DETECTOR (unchanged, but now uses FHIR‑stamped observations)
+# =====================================================================
 
 class EmergencyDetector:
     @staticmethod
     def detect_sepsis(vitals: VitalSigns, labs: LabResults) -> bool:
-        """SIRS criteria (simplified)."""
         criteria = 0
         if vitals.temperature_c > 38.0 or vitals.temperature_c < 36.0:
             criteria += 1
@@ -646,11 +774,9 @@ class EmergencyDetector:
 
     @staticmethod
     def detect_shock(vitals: VitalSigns, labs: LabResults) -> bool:
-        """Crude shock detection: hypotension + tachycardia + possible lactate."""
         if vitals.systolic_bp < 90 and vitals.heart_rate > 100:
             if labs.lactate and labs.lactate > 2.0:
                 return True
-            # even without lactate, strong hypotension with tachycardia is alarming
             return True
         return False
 
@@ -662,9 +788,9 @@ class EmergencyDetector:
             return "SEPSIS"
         return None
 
-# ===========================================================================
-# 10. ORCHESTRATOR (WITH NEGOTIATION & ESCALATION)
-# ===========================================================================
+# =====================================================================
+# 10. ORCHESTRATOR (unchanged)
+# =====================================================================
 
 @dataclass
 class OrchestrationResult:
@@ -688,20 +814,19 @@ class Orchestrator:
 
     def evaluate(self, patient: Patient) -> OrchestrationResult:
         print("\n" + "="*70)
-        print("MACO v2.2 ORCHESTRATION REPORT".center(70))
+        print("MACO v2.2 (FHIR-Ready) ORCHESTRATION REPORT".center(70))
         print("="*70)
         print(f"Patient: {patient.id} | Age: {patient.age} | eGFR: {patient.labs.egfr:.1f}")
-        print(f"Conditions: {patient.conditions}")
+        print(f"Conditions: {[c.display for c in patient.conditions]}")
         print(f"Allergies: {patient.allergies}")
         print(f"Meds: {patient.medications}")
+        print(f"Vitals timestamp: {patient.vitals.effective_datetime}")
+        print(f"Labs timestamp: {patient.labs.effective_datetime}")
         print("-"*70)
 
-        # Emergency override
         emergency = EmergencyDetector.is_emergency(patient)
         if emergency:
             print(f"[EMERGENCY] {emergency} detected – activating interrupt protocol.")
-            # In a real system, bypasses negotiation and returns highest‑priority emergency bundle.
-            # For prototype, we return a synthetic recommendation.
             return OrchestrationResult(
                 final_recommendation=None,
                 alternatives=[],
@@ -713,17 +838,15 @@ class Orchestrator:
                 rationale="Emergency override activated. Immediate stabilisation required."
             )
 
-        # 1. Collect proposals
         proposals: List[Proposal] = []
         for agent in self.agents:
             prop = agent.propose(patient)
-            if prop and prop.treatment not in [p.treatment for p in proposals]:  # avoid duplicates
+            if prop and prop.treatment not in [p.treatment for p in proposals]:
                 proposals.append(prop)
         print(f"\n📋 Initial proposals ({len(proposals)}):")
         for p in proposals:
             print(f"  - {p.agent_name}: {p.treatment} (confidence={p.confidence}, evidence={p.evidence_level.name})")
 
-        # 2. HCA validation (deterministic safety)
         valid_proposals: List[Proposal] = []
         vetoes: List[SafetyVeto] = []
         for prop in proposals:
@@ -744,7 +867,6 @@ class Orchestrator:
                 rationale="All proposals vetoed."
             )
 
-        # 3. Conflict matrix
         print("\n" + "-"*70)
         print("CONFLICT MATRIX")
         conflicts = []
@@ -759,13 +881,11 @@ class Orchestrator:
                       f"cum_tox={detail.cumulative_toxicity_score:.3f})")
         print(f"Global conflict score: {total_conflict:.3f}")
 
-        # 4. Negotiation if needed
         negotiation_occurred = False
         final_candidates = valid_proposals
         if total_conflict > self.conflict_threshold:
             negotiation_occurred = True
             print("\n[!] Conflict exceeds threshold → Negotiation loop activated.")
-            # Collect alternative proposals
             alternatives: List[Proposal] = []
             for agent in self.agents:
                 alt = agent.propose_alternative(patient, valid_proposals)
@@ -775,15 +895,11 @@ class Orchestrator:
                         alternatives.append(alt)
                         print(f"  Alternative from {agent.name}: {alt.treatment}")
             if alternatives:
-                # Combine all proposals (original + alternatives) and find best combination
                 all_options = valid_proposals + alternatives
-                # For simplicity, try all possible subsets (brute force, size up to 4)
-                best_combo = valid_proposals  # fallback
+                best_combo = valid_proposals
                 min_conflict = float('inf')
-                # We limit to subsets of size len(valid_proposals) to maintain multi‑agent coverage
                 from itertools import combinations
                 for combo in combinations(all_options, r=len(valid_proposals)):
-                    # Ensure unique agents in combo (optional, but we avoid double‑agent)
                     agents_in = set(p.agent_name for p in combo)
                     if len(agents_in) != len(valid_proposals):
                         continue
@@ -802,7 +918,6 @@ class Orchestrator:
             else:
                 print("  → No alternative proposals available; escalating conflict warning.")
 
-        # 5. Scoring
         print("\n" + "-"*70)
         print("FINAL SCORING")
         scored = [(p, self.scorer.compute_score(patient, p)) for p in final_candidates]
@@ -810,7 +925,6 @@ class Orchestrator:
         for prop, score in scored:
             print(f"  {prop.agent_name:15s} | {prop.treatment:15s} | score={score:.4f}")
 
-        # 6. Recommendation
         winner = scored[0][0] if scored else None
         reasons = []
         if vetoes:
@@ -835,7 +949,6 @@ class Orchestrator:
             print(f"  Guideline   : {winner.guideline_source} v{winner.guideline_version}")
             print(f"  Risks       : {', '.join(winner.risks)}")
             print(f"  Rationale   : {rationale}")
-            # Print rejected alternatives
             rejected = [f"{p.agent_name}/{p.treatment}" for p,_ in scored if p != winner]
             if rejected:
                 print(f"  Rejected    : {', '.join(rejected)}")
@@ -854,62 +967,58 @@ class Orchestrator:
             rationale=rationale
         )
 
-# ===========================================================================
-# 11. SIMULATION / DEMO
-# ===========================================================================
+# =====================================================================
+# 11. SIMULATION / DEMO (updated with FHIR timestamps and coded conditions)
+# =====================================================================
 
 if __name__ == "__main__":
-    # Build a complex patient
+    now = datetime.now()
+
     patient = Patient(
         id="PX-2026",
         age=72,
         weight_kg=68.5,
-        conditions=["heart_failure", "kidney_disease", "infection_bacterial"],
-        allergies=["penicillin", "ace_inhibitor"],   # allergic to ACEi (Lisinopril)
-        medications=["Metformin", "Furosemide"],     # already on diuretic and metformin
+        conditions=[
+            condition_from_key("heart_failure"),
+            condition_from_key("kidney_disease"),
+            condition_from_key("infection_bacterial")
+        ],
+        allergies=["penicillin", "ace_inhibitor"],
+        medications=["Metformin", "Furosemide"],
         vitals=VitalSigns(
-            systolic_bp=105,
-            diastolic_bp=68,
-            heart_rate=82,
-            respiratory_rate=18,
-            temperature_c=37.1,
-            spo2=96
+            systolic_bp=105, diastolic_bp=68, heart_rate=82,
+            respiratory_rate=18, temperature_c=37.1, spo2=96,
+            effective_datetime=now
         ),
         labs=LabResults(
-            creatinine=2.8,
-            egfr=28.0,          # CKD Stage 4
-            potassium=5.1,
-            sodium=138,
-            wbc=11_500,
-            lactate=1.8
+            creatinine=2.8, egfr=28.0, potassium=5.1, sodium=138,
+            wbc=11_500, lactate=1.8,
+            effective_datetime=now
         )
     )
 
-    # Instantiate framework components
-    agents = [
-        CardiologyAgent(),
-        NephrologyAgent(),
-        IDAgent(),
-    ]
+    agents = [CardiologyAgent(), NephrologyAgent(), IDAgent()]
     hca = HCA()
-    scorer = Scorer(ScoringConfig(
-        alpha=0.35, beta=0.30, gamma=0.15, delta=0.10, epsilon=0.10
-    ))
+    scorer = Scorer(ScoringConfig(alpha=0.35, beta=0.30, gamma=0.15, delta=0.10, epsilon=0.10))
     orchestrator = Orchestrator(agents, hca, scorer, conflict_threshold=1.5)
 
-    # Run orchestration
     result = orchestrator.evaluate(patient)
 
-    # --- Additional simulation for emergency scenario ---
+    # Demonstrate FHIR observation export
+    print("----- FHIR Observation Export (first 3 vitals) -----")
+    for obs in patient.vitals.to_fhir_observations()[:3]:
+        print(obs)
+
+    # Emergency simulation
     emerg_patient = Patient(
         id="PX-EMERG",
         age=65,
         weight_kg=80,
-        conditions=["sepsis", "heart_failure"],
+        conditions=[condition_from_key("sepsis"), condition_from_key("heart_failure")],
         allergies=[],
         medications=[],
-        vitals=VitalSigns(90, 60, 115, 24, 39.2, 92),
-        labs=LabResults(1.2, 80, 4.0, 140, wbc=18_000, lactate=4.5)
+        vitals=VitalSigns(90, 60, 115, 24, 39.2, 92, effective_datetime=now),
+        labs=LabResults(1.2, 80, 4.0, 140, wbc=18_000, lactate=4.5, effective_datetime=now)
     )
     print("\n\n>>> EMERGENCY SIMULATION <<<")
     orchestrator.evaluate(emerg_patient)
